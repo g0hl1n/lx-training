@@ -6,18 +6,24 @@
 #define DRIVER_AUTHOR "Richard Leitner <me@g0hl1n.net>"
 #define DRIVER_DESC   "Hello-Version Test Module"
 
+static char *who = "nobody";
+
+module_param(who, charp, S_IRUGO);
+MODULE_PARM_DESC(who, "Your name");
+
 static int __init hello_version_init(void)
 {
 	struct new_utsname *u;
 
 	u = utsname();
-	printk(KERN_INFO "Hi, you are running Linux %s\n", u->release);
+	printk(KERN_INFO "Hello %s, you are running Linux %s\n",
+	       who, u->release);
 	return 0;
 }
 
 static void __exit hello_version_exit(void)
 {
-	printk(KERN_INFO "bye... :-(\n");
+	printk(KERN_INFO "bye %s... :-(\n", who);
 }
 
 module_init(hello_version_init);
