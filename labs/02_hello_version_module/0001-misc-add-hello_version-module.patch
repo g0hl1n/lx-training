@@ -1,0 +1,97 @@
+From 9d24235c36b5fe273e730a27d22c657caade03c0 Mon Sep 17 00:00:00 2001
+From: Richard Leitner <me@g0hl1n.net>
+Date: Mon, 6 Oct 2014 17:50:46 +0200
+Subject: [PATCH] misc: add hello_version module
+
+This module is an example which was developed on the first day of the
+Linux Kernel Development Training by Free Electrons in Oct. 2014.
+
+Signed-off-by: Richard Leitner <me@g0hl1n.net>
+---
+ drivers/misc/Kconfig         |  6 ++++++
+ drivers/misc/Makefile        |  1 +
+ drivers/misc/hello_version.c | 46 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 53 insertions(+)
+ create mode 100644 drivers/misc/hello_version.c
+
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index a3e291d..2e715e4 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -515,6 +515,12 @@ config SRAM
+ 	  the genalloc API. It is supposed to be used for small on-chip SRAM
+ 	  areas found on many SoCs.
+ 
++config HELLO_VERSION
++	tristate "Example Hello-Version module"
++	help
++	  This is the example Hello-Version module created at the first day
++	  of the Linux Kernel Driver Development lab by Free Electrons.
++
+ source "drivers/misc/c2port/Kconfig"
+ source "drivers/misc/eeprom/Kconfig"
+ source "drivers/misc/cb710/Kconfig"
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index f45473e..8fae713 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -53,3 +53,4 @@ obj-$(CONFIG_VMWARE_VMCI)	+= vmw_vmci/
+ obj-$(CONFIG_LATTICE_ECP3_CONFIG)	+= lattice-ecp3-config.o
+ obj-$(CONFIG_SRAM)		+= sram.o
+ obj-y				+= mic/
++obj-$(CONFIG_HELLO_VERSION)	+= hello_version.o
+diff --git a/drivers/misc/hello_version.c b/drivers/misc/hello_version.c
+new file mode 100644
+index 0000000..b46a6d8
+--- /dev/null
++++ b/drivers/misc/hello_version.c
+@@ -0,0 +1,46 @@
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/i2c.h>
++#include <linux/utsname.h>
++
++#define DRIVER_AUTHOR "Richard Leitner <me@g0hl1n.net>"
++#define DRIVER_DESC   "Hello-Version Test Module"
++
++static char *who = "nobody";
++static struct timeval starttime, endtime;
++
++module_param(who, charp, S_IRUGO);
++MODULE_PARM_DESC(who, "Your name");
++
++static int __init hello_version_init(void)
++{
++	struct new_utsname *u;
++
++	/* get start time */
++	do_gettimeofday(&starttime);
++
++	/* get kernel version */
++	u = utsname();
++
++	pr_info("Hello %s, you are running Linux %s\n", who, u->release);
++	return 0;
++}
++
++static void __exit hello_version_exit(void)
++{
++	unsigned long run_ms;
++
++	/* get end time & calc running time */
++	do_gettimeofday(&endtime);
++	run_ms = (endtime.tv_sec - starttime.tv_sec) * 1000 +
++		 (endtime.tv_usec - starttime.tv_usec) / 1000;
++
++	pr_info("Bye %s, the %lums with you were nice!\n", who, run_ms);
++}
++
++module_init(hello_version_init);
++module_exit(hello_version_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR(DRIVER_AUTHOR);
++MODULE_DESCRIPTION(DRIVER_DESC);
+-- 
+1.9.1
+
