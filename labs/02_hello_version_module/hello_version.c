@@ -22,8 +22,7 @@ static int __init hello_version_init(void)
 	/* get kernel version */
 	u = utsname();
 
-	printk(KERN_INFO "Hello %s, you are running Linux %s\n",
-	       who, u->release);
+	pr_info("Hello %s, you are running Linux %s\n", who, u->release);
 	return 0;
 }
 
@@ -36,7 +35,7 @@ static void __exit hello_version_exit(void)
 	run_ms = (endtime.tv_sec - starttime.tv_sec) * 1000 +
 		 (endtime.tv_usec - starttime.tv_usec) / 1000;
 
-	printk(KERN_INFO "Bye %s, the %lums with you were nice!\n", who, run_ms);
+	pr_info("Bye %s, the %lums with you were nice!\n", who, run_ms);
 }
 
 module_init(hello_version_init);
