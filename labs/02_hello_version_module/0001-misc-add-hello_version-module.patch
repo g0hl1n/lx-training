@@ -1,4 +1,4 @@
-From 9d24235c36b5fe273e730a27d22c657caade03c0 Mon Sep 17 00:00:00 2001
+From a4d5f89c837c07f5037e079504c54daf74fc9bbc Mon Sep 17 00:00:00 2001
 From: Richard Leitner <me@g0hl1n.net>
 Date: Mon, 6 Oct 2014 17:50:46 +0200
 Subject: [PATCH] misc: add hello_version module
@@ -10,8 +10,8 @@ Signed-off-by: Richard Leitner <me@g0hl1n.net>
 ---
  drivers/misc/Kconfig         |  6 ++++++
  drivers/misc/Makefile        |  1 +
- drivers/misc/hello_version.c | 46 ++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 53 insertions(+)
+ drivers/misc/hello_version.c | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 49 insertions(+)
  create mode 100644 drivers/misc/hello_version.c
 
 diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
@@ -42,10 +42,10 @@ index f45473e..8fae713 100644
 +obj-$(CONFIG_HELLO_VERSION)	+= hello_version.o
 diff --git a/drivers/misc/hello_version.c b/drivers/misc/hello_version.c
 new file mode 100644
-index 0000000..b46a6d8
+index 0000000..f3644ca
 --- /dev/null
 +++ b/drivers/misc/hello_version.c
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,42 @@
 +#include <linux/init.h>
 +#include <linux/module.h>
 +#include <linux/i2c.h>
@@ -62,15 +62,11 @@ index 0000000..b46a6d8
 +
 +static int __init hello_version_init(void)
 +{
-+	struct new_utsname *u;
-+
 +	/* get start time */
 +	do_gettimeofday(&starttime);
 +
-+	/* get kernel version */
-+	u = utsname();
-+
-+	pr_info("Hello %s, you are running Linux %s\n", who, u->release);
++	pr_info("Hello %s, you are running Linux %s\n",
++		who, init_uts_ns.name.release);
 +	return 0;
 +}
 +

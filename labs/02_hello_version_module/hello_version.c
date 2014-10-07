@@ -14,15 +14,11 @@ MODULE_PARM_DESC(who, "Your name");
 
 static int __init hello_version_init(void)
 {
-	struct new_utsname *u;
-
 	/* get start time */
 	do_gettimeofday(&starttime);
 
-	/* get kernel version */
-	u = utsname();
-
-	pr_info("Hello %s, you are running Linux %s\n", who, u->release);
+	pr_info("Hello %s, you are running Linux %s\n",
+		who, init_uts_ns.name.release);
 	return 0;
 }
 
