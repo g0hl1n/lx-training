@@ -8,3 +8,4 @@ Embedded Linux Training in Avignon, Oct. 2014
  * BeagleBone Black Docu: https://github.com/CircuitCo/BeagleBone-Black
  * TI AM355x SoC Docu: http://www.ti.com/lit/ds/symlink/am3359.pdf
  * TI AM35559 TRM: http://www.ti.com/lit/ug/spruh73k/spruh73k.pdf
+ * Nintendo Nunchuk Docu: http://web.engr.oregonstate.edu/~sullivae/ece375/pdf/nunchuk.pdf
