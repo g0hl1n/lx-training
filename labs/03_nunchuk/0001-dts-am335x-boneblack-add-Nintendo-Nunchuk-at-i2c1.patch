@@ -1,0 +1,33 @@
+From 7f63f674836d8883847df085b81176e6bbb54502 Mon Sep 17 00:00:00 2001
+From: Richard Leitner <me@g0hl1n.net>
+Date: Tue, 7 Oct 2014 09:48:47 +0200
+Subject: [PATCH 1/2] dts: am335x: boneblack: add Nintendo Nunchuk at i2c1
+
+Add the Nintendo Nunchuk device at i2c1 using address 0x51.
+
+Signed-off-by: Richard Leitner <me@g0hl1n.net>
+---
+ arch/arm/boot/dts/am335x-boneblack.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm/boot/dts/am335x-boneblack.dts b/arch/arm/boot/dts/am335x-boneblack.dts
+index 6b71ad9..5e958e5 100644
+--- a/arch/arm/boot/dts/am335x-boneblack.dts
++++ b/arch/arm/boot/dts/am335x-boneblack.dts
+@@ -76,3 +76,13 @@
+ 		status = "okay";
+ 	};
+ };
++
++&i2c1 {
++	status = "okay";
++	clock-frequency = <100000>;
++
++	nunchuk: nunchuk@52 {
++		compatible = "nintendo,nunchuk";
++		reg = <0x52>;
++	};
++};
+-- 
+1.9.1
+

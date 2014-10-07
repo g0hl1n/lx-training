@@ -1,0 +1,48 @@
+From f6e9217523c16fd0fc498a4d0b8fc5cfb2845077 Mon Sep 17 00:00:00 2001
+From: Richard Leitner <me@g0hl1n.net>
+Date: Tue, 7 Oct 2014 14:22:08 +0200
+Subject: [PATCH 2/2] dts: am334x: bone: add pinmux for i2c-1 bus
+
+Configure pinmux that i2c-1 bus is available for the Nintendo Nunchuck
+
+Signed-off-by: Richard Leitner <me@g0hl1n.net>
+---
+ arch/arm/boot/dts/am335x-bone-common.dtsi | 7 +++++++
+ arch/arm/boot/dts/am335x-boneblack.dts    | 3 +++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/arch/arm/boot/dts/am335x-bone-common.dtsi b/arch/arm/boot/dts/am335x-bone-common.dtsi
+index e3f27ec..6d19e54 100644
+--- a/arch/arm/boot/dts/am335x-bone-common.dtsi
++++ b/arch/arm/boot/dts/am335x-bone-common.dtsi
+@@ -84,6 +84,13 @@
+ 		>;
+ 	};
+ 
++	i2c1_pins: pinmux_i2c1_pins {
++		pinctrl-single,pins = <
++			0x158 (PIN_INPUT_PULLUP | MUX_MODE2)	/* spi0_d1.i2c1_sda */
++			0x15c (PIN_INPUT_PULLUP | MUX_MODE2)	/* spi0_cs0.i2c1_sc1 */
++		>;
++	};
++
+ 	uart0_pins: pinmux_uart0_pins {
+ 		pinctrl-single,pins = <
+ 			0x170 (PIN_INPUT_PULLUP | MUX_MODE0)	/* uart0_rxd.uart0_rxd */
+diff --git a/arch/arm/boot/dts/am335x-boneblack.dts b/arch/arm/boot/dts/am335x-boneblack.dts
+index 5e958e5..a2129d7 100644
+--- a/arch/arm/boot/dts/am335x-boneblack.dts
++++ b/arch/arm/boot/dts/am335x-boneblack.dts
+@@ -78,6 +78,9 @@
+ };
+ 
+ &i2c1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c1_pins>;
++
+ 	status = "okay";
+ 	clock-frequency = <100000>;
+ 
+-- 
+1.9.1
+
