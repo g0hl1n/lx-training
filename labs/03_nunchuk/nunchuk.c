@@ -3,6 +3,7 @@
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
+#include <linux/input-polldev.h>
 
 #define DRIVER_AUTHOR "Richard Leitner <me@g0hl1n.net>"
 #define DRIVER_DESC   "Nintendo Nunchuk Driver"
@@ -25,9 +26,15 @@ struct nunchuk_regs {
 	bool cpressed;
 };
 
-int nunchuck_read_registers(struct i2c_client *client, u8 *data)
+struct nunchuk_dev {
+	struct input_polled_dev *poll_dev;
+	struct i2c_client *i2c_client;
+};
+
+int nunchuck_read_registers(struct i2c_client *client, struct nunchuk_regs *reg)
 {
 	int err;
+	u8 data[NUNCHUK_REG_SIZE];
 
 	/* trigger a register read */
 	err = i2c_smbus_write_byte(client, NUNCHUK_CMD_REG_READ);
@@ -41,79 +48,113 @@ int nunchuck_read_registers(struct i2c_client *client, u8 *data)
 
 	i2c_master_recv(client, data, NUNCHUK_REG_SIZE); /* read registers */
 
-	return 0;
-}
-
-/*
- * the nunchuk updates it's registers only on reading,
- * so we read it twice to get the current values
- */
-int nunchuck_read_current_registers(struct i2c_client *client,
-				    struct nunchuk_regs *regs)
-{
-	int err;
-	char data[NUNCHUK_REG_SIZE];
-
-	/* parse the old data and throw it away */
-	err = nunchuck_read_registers(client, data);
-	if (err < 0)
-		return err;
-	memset(data, 0, NUNCHUK_REG_SIZE);
-
-	/* the nunchuk needs some time between the two register reads */
-	mdelay(5); /* FIXME determine the minumum time (2ms worked already) */
-
-	err = nunchuck_read_registers(client, data);
-	if (err < 0)
-		return err;
+	/* we don't need double reading at a polling interface */
 
 	dev_dbg(&client->dev, "read reg: 0x%02X%02X%02X%02X%02X%02X\n",
 		data[0], data[1], data[2], data[3], data[4], data[5]);
 
 	/* get joystick values */
-	regs->joystick_x = data[0] & 0xFF;
-	regs->joystick_y = data[1] & 0xFF;
+	reg->joystick_x = data[0] & 0xFF;
+	reg->joystick_y = data[1] & 0xFF;
 
 	/* get accellerometer values,
 	 * the lower two bits have to be extracted from the last byte */
-	regs->accel_x = data[2] << 2;
-	regs->accel_x += (data[5] & (BIT(2) | BIT(3))) >> 2;
-	regs->accel_y = data[3] << 2;
-	regs->accel_y += (data[5] & (BIT(4) | BIT(5))) >> 4;
-	regs->accel_z = data[4] << 2;
-	regs->accel_z += (data[5] & (BIT(6) | BIT(7))) >> 6;
+	reg->accel_x = data[2] << 2;
+	reg->accel_x += (data[5] & (BIT(2) | BIT(3))) >> 2;
+	reg->accel_y = data[3] << 2;
+	reg->accel_y += (data[5] & (BIT(4) | BIT(5))) >> 4;
+	reg->accel_z = data[4] << 2;
+	reg->accel_z += (data[5] & (BIT(6) | BIT(7))) >> 6;
 
 	/* get Z state (first bit of last byte) */
-	regs->zpressed = 1;
+	reg->zpressed = 1;
 	if (data[5] & BIT(0)) /* Z is released */
-		regs->zpressed = 0;
+		reg->zpressed = 0;
 
 	/* get Z state (second bit of last byte) */
-	regs->cpressed = 1;
+	reg->cpressed = 1;
 	if (data[5] & BIT(1)) /* C is released */
-		regs->cpressed = 0;
+		reg->cpressed = 0;
 	return 0;
+}
+
+void nunchuk_poll(struct input_polled_dev *dev)
+{
+	int err;
+	struct nunchuk_dev *nunchuk = dev->private;
+	struct input_dev *input = nunchuk->poll_dev->input;
+	struct nunchuk_regs regs;
+
+	err = nunchuck_read_registers(nunchuk->i2c_client, &regs);
+	if (err)
+		return;
+
+	/* write values to input subsystem */
+	input_report_key(input, BTN_Z, regs.zpressed);
+	input_report_key(input, BTN_C, regs.cpressed);
+
+	input_report_abs(input, ABS_X, regs.joystick_x);
+	input_report_abs(input, ABS_Y, regs.joystick_y);
 }
 
 static int nunchuk_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
 	int err;
-	struct nunchuk_regs *regs;
+	struct input_polled_dev *poll_dev;
+	struct input_dev *input;
+	struct nunchuk_dev *nunchuk;
 
 	dev_info(&client->dev, "Probe " DRIVER_DESC "\n");
 
 	/* allocate our memory */
-	regs = kmalloc(sizeof(*regs), GFP_KERNEL);
-	if (regs == NULL)
+	nunchuk = devm_kzalloc(&client->dev, sizeof(struct nunchuk_dev),
+			       GFP_KERNEL);
+	if (!nunchuk)
 		return -ENOMEM;
+
+	poll_dev = input_allocate_polled_device();
+	if (!poll_dev) {
+		err = -ENOMEM;
+		goto exit_err;
+	}
+
+	/* set the i2c client and the polling device for the nunchuk */
+	nunchuk->i2c_client = client;
+	nunchuk->poll_dev = poll_dev;
+
+	/* backlink from polldev to nunchuk */
+	poll_dev->private = nunchuk;
+
+	/* link the nunchuk to the i2c client */
+	i2c_set_clientdata(client, nunchuk);
+
+	/* set the i2c client as parent of the input device */
+	input = poll_dev->input;
+	input->dev.parent = &client->dev;
+
+	/* input subsystem information */
+	input->name = "Wii Nunchuk";
+	input->id.bustype = BUS_I2C;
+
+	set_bit(EV_KEY, input->evbit);
+	set_bit(BTN_C, input->keybit);
+	set_bit(BTN_Z, input->keybit);
+
+	set_bit(EV_ABS, input->evbit);
+	input_set_abs_params(input, ABS_X, 0, 255, 0, 0);
+	input_set_abs_params(input, ABS_Y, 0, 255, 0, 0);
+
+	/* poll setup */
+	poll_dev->poll = nunchuk_poll;
+	poll_dev->poll_interval = 50;
 
 	/* setup non-encrypted connection */
 	err = i2c_smbus_write_byte_data(client, NUNCHUK_ADR_SETUP_UNENC,
 					NUNCHUK_CMD_SETUP_UNENC);
 	if (err < 0) {
 		dev_err(&client->dev, "write i2c data failed: %d\n", err);
-		return err;
+		goto exit_with_free;
 	}
 
 	usleep_range(900, 1100); /* wait ~1ms for command completion */
@@ -123,29 +164,37 @@ static int nunchuk_probe(struct i2c_client *client,
 					NUNCHUK_CMD_SETUP_END);
 	if (err < 0) {
 		dev_err(&client->dev, "write i2c data failed: %d\n", err);
-		return err;
+		goto exit_with_free;
 	}
 
-	/* read & print the register values */
-	err = nunchuck_read_current_registers(client, regs);
-	if (err < 0)
-		return err;
+	/* register the device */
+	err = input_register_polled_device(poll_dev);
+	if (err)
+		goto exit_with_free;
 
-	dev_info(&client->dev, "Accellerometer: X=%3d; Y=%3d; Z=%3d\n",
-		 regs->accel_x, regs->accel_y, regs->accel_z);
-	dev_info(&client->dev, "Joystick:       X=%3d; Y=%3d\n",
-		 regs->joystick_x, regs->joystick_y);
-	dev_info(&client->dev, "Buttons:        Z=%3d; C=%3d\n",
-		 regs->zpressed, regs->cpressed);
+	return 0; /* exit with success */
 
-	/* free and exit */
-	kfree(regs);
-	return 0;
+exit_with_free:
+	input_free_polled_device(poll_dev);
+exit_err:
+	return err;
 }
 
 static int nunchuk_remove(struct i2c_client *client)
 {
+	struct nunchuk_dev *nunchuk;
+	struct input_polled_dev *poll_dev;
+
 	dev_info(&client->dev, "Remove " DRIVER_DESC "\n");
+
+	nunchuk = i2c_get_clientdata(client);
+	/* TODO check rc */
+
+	poll_dev = nunchuk->poll_dev;
+
+	input_unregister_polled_device(poll_dev);
+
+	input_free_polled_device(poll_dev);
 	return 0;
 }
 
