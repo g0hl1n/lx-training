@@ -1,5 +1,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
 
@@ -8,12 +9,28 @@
 
 #define NUNCHUK_REG_SIZE 6
 
+#define NUNCHUK_CMD_REG_READ	0x00
+#define NUNCHUK_ADR_SETUP_UNENC	0xf0 /* address */
+#define NUNCHUK_CMD_SETUP_UNENC	0x55 /*     and command for unencrypted setup */
+#define NUNCHUK_ADR_SETUP_END	0xfb /* address */
+#define NUNCHUK_CMD_SETUP_END	0x00 /*     and command for ending the setup */
+
+struct nunchuk_regs {
+	u8 joystick_x;
+	u8 joystick_y;
+	u16 accel_x;
+	u16 accel_y;
+	u16 accel_z;
+	bool zpressed;
+	bool cpressed;
+};
+
 int nunchuck_read_registers(struct i2c_client *client, u8 *data)
 {
 	int err;
 
 	/* trigger a register read */
-	err = i2c_smbus_write_byte(client, 0x00);
+	err = i2c_smbus_write_byte(client, NUNCHUK_CMD_REG_READ);
 	if (err < 0) {
 		dev_err(&client->dev, "write i2c data failed: %d\n", err);
 		return err;
@@ -31,9 +48,11 @@ int nunchuck_read_registers(struct i2c_client *client, u8 *data)
  * the nunchuk updates it's registers only on reading,
  * so we read it twice to get the current values
  */
-int nunchuck_read_current_registers(struct i2c_client *client, u8 *data)
+int nunchuck_read_current_registers(struct i2c_client *client,
+				    struct nunchuk_regs *regs)
 {
 	int err;
+	char data[NUNCHUK_REG_SIZE];
 
 	/* parse the old data and throw it away */
 	err = nunchuck_read_registers(client, data);
@@ -50,6 +69,29 @@ int nunchuck_read_current_registers(struct i2c_client *client, u8 *data)
 
 	dev_dbg(&client->dev, "read reg: 0x%02X%02X%02X%02X%02X%02X\n",
 		data[0], data[1], data[2], data[3], data[4], data[5]);
+
+	/* get joystick values */
+	regs->joystick_x = data[0] & 0xFF;
+	regs->joystick_y = data[1] & 0xFF;
+
+	/* get accellerometer values,
+	 * the lower two bits have to be extracted from the last byte */
+	regs->accel_x = data[2] << 2;
+	regs->accel_x += (data[5] & (BIT(2) | BIT(3))) >> 2;
+	regs->accel_y = data[3] << 2;
+	regs->accel_y += (data[5] & (BIT(4) | BIT(5))) >> 4;
+	regs->accel_z = data[4] << 2;
+	regs->accel_z += (data[5] & (BIT(6) | BIT(7))) >> 6;
+
+	/* get Z state (first bit of last byte) */
+	regs->zpressed = 1;
+	if (data[5] & BIT(0)) /* Z is released */
+		regs->zpressed = 0;
+
+	/* get Z state (second bit of last byte) */
+	regs->cpressed = 1;
+	if (data[5] & BIT(1)) /* C is released */
+		regs->cpressed = 0;
 	return 0;
 }
 
@@ -57,19 +99,18 @@ static int nunchuk_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
 	int err;
-	u8 regs[NUNCHUK_REG_SIZE];
-	int joystick_x = -1;
-	int joystick_y = -1;
-	int accel_x = -1;
-	int accel_y = -1;
-	int accel_z = -1;
-	int zpressed = -1;
-	int cpressed = -1;
+	struct nunchuk_regs *regs;
 
 	dev_info(&client->dev, "Probe " DRIVER_DESC "\n");
 
+	/* allocate our memory */
+	regs = kmalloc(sizeof(*regs), GFP_KERNEL);
+	if (regs == NULL)
+		return -ENOMEM;
+
 	/* setup non-encrypted connection */
-	err = i2c_smbus_write_byte_data(client, 0xf0, 0x55);
+	err = i2c_smbus_write_byte_data(client, NUNCHUK_ADR_SETUP_UNENC,
+					NUNCHUK_CMD_SETUP_UNENC);
 	if (err < 0) {
 		dev_err(&client->dev, "write i2c data failed: %d\n", err);
 		return err;
@@ -78,46 +119,27 @@ static int nunchuk_probe(struct i2c_client *client,
 	usleep_range(900, 1100); /* wait ~1ms for command completion */
 
 	/* finish initialization */
-	err = i2c_smbus_write_byte_data(client, 0xfb, 0x00);
+	err = i2c_smbus_write_byte_data(client, NUNCHUK_ADR_SETUP_END,
+					NUNCHUK_CMD_SETUP_END);
 	if (err < 0) {
 		dev_err(&client->dev, "write i2c data failed: %d\n", err);
 		return err;
 	}
 
+	/* read & print the register values */
 	err = nunchuck_read_current_registers(client, regs);
 	if (err < 0)
 		return err;
 
-	/* get joystick values */
-	joystick_x = regs[0] & 0xFF;
-	joystick_y = regs[1] & 0xFF;
-
-	/* get accellerometer values,
-	 * the lower two bits have to be extracted from the last byte */
-	accel_x = regs[2] << 2;
-	accel_x += (regs[5] & (BIT(2) | BIT(3))) >> 2;
-	accel_y = regs[3] << 2;
-	accel_y += (regs[5] & (BIT(4) | BIT(5))) >> 4;
-	accel_z = regs[4] << 2;
-	accel_z += (regs[5] & (BIT(6) | BIT(7))) >> 6;
-
-	/* get Z state (first bit of last byte) */
-	zpressed = 1;
-	if (regs[5] & BIT(0)) /* Z is released */
-		zpressed = 0;
-
-	/* get Z state (second bit of last byte) */
-	cpressed = 1;
-	if (regs[5] & BIT(1)) /* C is released */
-		cpressed = 0;
-
 	dev_info(&client->dev, "Accellerometer: X=%3d; Y=%3d; Z=%3d\n",
-		 accel_x, accel_y, accel_z);
+		 regs->accel_x, regs->accel_y, regs->accel_z);
 	dev_info(&client->dev, "Joystick:       X=%3d; Y=%3d\n",
-		 joystick_x, joystick_y);
+		 regs->joystick_x, regs->joystick_y);
 	dev_info(&client->dev, "Buttons:        Z=%3d; C=%3d\n",
-		 zpressed, cpressed);
+		 regs->zpressed, regs->cpressed);
 
+	/* free and exit */
+	kfree(regs);
 	return 0;
 }
 
