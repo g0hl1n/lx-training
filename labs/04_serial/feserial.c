@@ -10,6 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 
+#include <asm/uaccess.h>
+
 struct feserial_dev {
 	struct miscdevice miscdev;
 	void __iomem *regs;
@@ -37,7 +39,50 @@ void write_char(struct feserial_dev *dev, char c)
 static ssize_t feserial_write(struct file *fp, const char __user *buf,
 			      size_t len, loff_t *off)
 {
-	return -EINVAL;
+	struct feserial_dev *dev;
+	struct miscdevice *miscdev;
+	char *kbuf;
+	int err = 0;
+
+	/* get miscdev from struct file.
+	 * to work the patch from Thomas Petazzoni have to be applied! */
+	miscdev = fp->private_data;
+	if (miscdev == NULL) {
+		err = -EFAULT;
+		pr_err("unable to get device from write(), is the patch applied?\n");
+		goto err_exit;
+	}
+
+	/* get feserial_dev from miscdev */
+	dev = container_of(fp->private_data, struct feserial_dev, miscdev);
+	if (dev == NULL) {
+		err = -EFAULT;
+		dev_err(miscdev->parent, "unable to get container_of miscdev\n");
+		goto err_exit;
+	}
+
+	/* allocate kernel memory and copy over buffer */
+	kbuf = kmalloc(len, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+	err = copy_from_user(kbuf, buf, len);
+	if (err) {
+		err = -EFAULT;
+		goto err_free;
+	}
+
+	/* actually write data */
+	for (err = 0; err < len; err++) {
+		write_char(dev, kbuf[err]);
+
+		if (kbuf[err] == '\n') /* send also \r if \n was sent */
+			write_char(dev, '\r');
+	}
+
+err_free:
+	kfree(kbuf);
+err_exit:
+	return err;
 }
 
 static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
@@ -111,7 +156,6 @@ static int feserial_probe(struct platform_device *pdev)
 
 err_free:
 	kfree(dev->miscdev.name);
-err_exit:
 	return err;
 }
 
