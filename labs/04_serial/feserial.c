@@ -5,8 +5,13 @@
 #include <linux/pm_runtime.h>
 #include <linux/serial_reg.h>
 #include <linux/io.h>
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
 
 struct feserial_dev {
+	struct miscdevice miscdev;
 	void __iomem *regs;
 };
 
@@ -29,11 +34,30 @@ void write_char(struct feserial_dev *dev, char c)
 	reg_write(dev, c, UART_TX);
 }
 
+static ssize_t feserial_write(struct file *fp, const char __user *buf,
+			      size_t len, loff_t *off)
+{
+	return -EINVAL;
+}
+
+static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
+			     loff_t *off)
+{
+	return -EINVAL;
+}
+
+static const struct file_operations feserial_fops = {
+	.owner	= THIS_MODULE,
+	.read	= feserial_read,
+	.write	= feserial_write,
+};
+
 static int feserial_probe(struct platform_device *pdev)
 {
 	struct feserial_dev *dev;
 	struct resource *res;
 	unsigned int baud_divisor, uartclk;
+	int err;
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(struct feserial_dev), GFP_KERNEL);
 	if (!dev)
@@ -68,17 +92,44 @@ static int feserial_probe(struct platform_device *pdev)
 	reg_write(dev, UART_FCR_CLEAR_RCVR || UART_FCR_CLEAR_XMIT, UART_FCR);
 	reg_write(dev, 0x00, UART_OMAP_MDR1);
 
-	/* test write */
-	write_char(dev, 'F');
+	/* attach private data struct to driver */
+	platform_set_drvdata(pdev, dev);
+
+	/* initialize the miscdev */
+	dev->miscdev.minor = MISC_DYNAMIC_MINOR;
+	dev->miscdev.name = kasprintf(GFP_KERNEL, "feserial-%x", res->start);
+	dev->miscdev.fops = &feserial_fops;
+
+	err = misc_register(&dev->miscdev);
+	if (err) {
+		dev_err(&pdev->dev, "misc device register failed\n");
+		goto err_free;
+	}
 
 	dev_info(&pdev->dev, "Probed fserial\n");
 	return 0;
+
+err_free:
+	kfree(dev->miscdev.name);
+err_exit:
+	return err;
 }
 
 static int feserial_remove(struct platform_device *pdev)
 {
+	struct feserial_dev *dev;
+	int err;
+
+	dev = platform_get_drvdata(pdev);
+
+	/* unregister */
+	err = misc_deregister(&dev->miscdev);
+
 	/* ower management disable */
 	pm_runtime_disable(&pdev->dev);
+
+	/* free */
+	kfree(dev->miscdev.name);
 
 	dev_info(&pdev->dev, "Removed fserial\n");
 	return 0;
