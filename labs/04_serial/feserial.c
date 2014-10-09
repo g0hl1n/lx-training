@@ -12,9 +12,14 @@
 
 #include <asm/uaccess.h>
 
+/* ioctl operations */
+#define IOCTL_SERIAL_RESET_COUNTER	0
+#define IOCTL_SERIAL_GET_COUNTER	1
+
 struct feserial_dev {
 	struct miscdevice miscdev;
 	void __iomem *regs;
+	unsigned long wcounter;
 };
 
 static unsigned int reg_read(struct feserial_dev *dev, int off)
@@ -32,6 +37,8 @@ void write_char(struct feserial_dev *dev, char c)
 	/* busy waiting for UART_LSR_THRE = Transmit-hold-register empty */
 	while ((reg_read(dev, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
+
+	dev->wcounter++; /* increment write counter */
 
 	reg_write(dev, c, UART_TX);
 }
@@ -91,10 +98,50 @@ static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
 	return -EINVAL;
 }
 
+static long feserial_unlocked_ioctl(struct file *fp, unsigned int ioctl_num,
+				    unsigned long ioctl_param)
+{
+	struct feserial_dev *dev;
+	struct miscdevice *miscdev;
+
+	/* get miscdev from struct file.
+	 * to work the patch from Thomas Petazzoni have to be applied! */
+	miscdev = fp->private_data;
+	if (miscdev == NULL) {
+		pr_err("unable to get device from write(), is the patch applied?\n");
+		return -EFAULT;
+	}
+
+	/* get feserial_dev from miscdev */
+	dev = container_of(fp->private_data, struct feserial_dev, miscdev);
+	if (dev == NULL) {
+		pr_err("unable to get feserial_dev from miscdevice\n");
+		return -EFAULT;
+	}
+
+	switch (ioctl_num) {
+	case IOCTL_SERIAL_RESET_COUNTER:
+		/* reset the counter for the current device
+		 * IGNORE the ioctl_param */
+		dev->wcounter = 0;
+		break;
+	case IOCTL_SERIAL_GET_COUNTER:
+		/* get the counter for the current device */
+		put_user(dev->wcounter, (char *)ioctl_param);
+		break;
+	default:
+		/* error */
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
 static const struct file_operations feserial_fops = {
-	.owner	= THIS_MODULE,
-	.read	= feserial_read,
-	.write	= feserial_write,
+	.owner		= THIS_MODULE,
+	.read		= feserial_read,
+	.write		= feserial_write,
+	.unlocked_ioctl	= feserial_unlocked_ioctl,
 };
 
 static int feserial_probe(struct platform_device *pdev)
@@ -107,6 +154,7 @@ static int feserial_probe(struct platform_device *pdev)
 	dev = devm_kzalloc(&pdev->dev, sizeof(struct feserial_dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
+	dev->wcounter = 0;
 
 	/* get the physical base address from DT */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
