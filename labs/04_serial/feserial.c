@@ -9,6 +9,7 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/interrupt.h>
 
 #include <asm/uaccess.h>
 
@@ -20,6 +21,7 @@ struct feserial_dev {
 	struct miscdevice miscdev;
 	void __iomem *regs;
 	unsigned long wcounter;
+	int irq;
 };
 
 static unsigned int reg_read(struct feserial_dev *dev, int off)
@@ -144,6 +146,16 @@ static const struct file_operations feserial_fops = {
 	.unlocked_ioctl	= feserial_unlocked_ioctl,
 };
 
+irqreturn_t feserial_irq_handler(int irq, void *dev_id)
+{
+	unsigned int kbuf;
+
+	kbuf = reg_read(dev_id, UART_RX);
+
+	pr_info("IRQ %d read %c\n", irq, kbuf);
+	return IRQ_HANDLED;
+}
+
 static int feserial_probe(struct platform_device *pdev)
 {
 	struct feserial_dev *dev;
@@ -193,6 +205,17 @@ static int feserial_probe(struct platform_device *pdev)
 	dev->miscdev.name = kasprintf(GFP_KERNEL, "feserial-%x", res->start);
 	dev->miscdev.fops = &feserial_fops;
 
+	/* enable, get & request iterrupt */
+	reg_write(dev, UART_IER_RDI, UART_IER);
+	dev->irq = platform_get_irq(pdev, 0);
+	err = devm_request_irq(&pdev->dev, dev->irq, feserial_irq_handler, 0,
+			 "feserial", dev);
+	if (err) {
+		dev_err(&pdev->dev, "irq request failed\n");
+		goto err_free;
+	}
+
+	/* register the device */
 	err = misc_register(&dev->miscdev);
 	if (err) {
 		dev_err(&pdev->dev, "misc device register failed\n");
