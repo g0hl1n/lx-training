@@ -23,22 +23,34 @@
 struct feserial_dev {
 	struct miscdevice miscdev;
 	void __iomem *regs;
+	spinlock_t reg_lock; /* serial register rw lock */
 	unsigned long wcounter;
 	int irq;
 	char serial_buf[SERIAL_BUFSIZE];
 	int serial_buf_rd; /* reading index */
 	int serial_buf_wr; /* writing index */
+	spinlock_t buf_lock; /* serial buffer rw lock */
 	wait_queue_head_t serial_wait;
 };
 
 static unsigned int reg_read(struct feserial_dev *dev, int off)
 {
-	return readl(dev->regs + off*4);
+	unsigned int val;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dev->reg_lock, flags);
+	val = readl(dev->regs + off*4);
+	spin_unlock_irqrestore(&dev->reg_lock, flags);
+	return val;
 }
 
 static void reg_write(struct feserial_dev *dev, unsigned int val, int off)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&dev->reg_lock, flags);
 	writel(val, dev->regs + off*4);
+	spin_unlock_irqrestore(&dev->reg_lock, flags);
 }
 
 void write_char(struct feserial_dev *dev, char c)
@@ -104,9 +116,11 @@ err_exit:
 static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
 			     loff_t *off)
 {
+	unsigned long flags;
 	struct feserial_dev *dev;
 	struct miscdevice *miscdev;
 	int err;
+	char kbuf;
 
 	/* get miscdev from struct file.
 	 * to work the patch from Thomas Petazzoni have to be applied! */
@@ -127,7 +141,11 @@ static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
 	if (err)
 		return -ERESTARTSYS;
 
-	put_user(dev->serial_buf[dev->serial_buf_rd++], buf);
+	spin_lock_irqsave(&dev->buf_lock, flags);
+	kbuf = dev->serial_buf[dev->serial_buf_rd++];
+	spin_unlock_irqrestore(&dev->buf_lock, flags);
+
+	put_user(kbuf, buf);
 	return 1;
 }
 
@@ -181,11 +199,15 @@ irqreturn_t feserial_irq_handler(int irq, void *dev_id)
 {
 	struct feserial_dev *dev = dev_id;
 	char kbuf;
+	unsigned long flags;
 
 	kbuf = reg_read(dev, UART_RX);
+
+	spin_lock_irqsave(&dev->buf_lock, flags);
 	dev->serial_buf[dev->serial_buf_wr++] = kbuf;
 	if (dev->serial_buf_wr >= SERIAL_BUFSIZE)
 		dev->serial_buf_wr = 0;
+	spin_unlock_irqrestore(&dev->buf_lock, flags);
 	wake_up(&dev->serial_wait);
 
 	return IRQ_HANDLED;
@@ -205,6 +227,8 @@ static int feserial_probe(struct platform_device *pdev)
 	dev->serial_buf_rd = 0;
 	dev->serial_buf_wr = 0;
 	init_waitqueue_head(&dev->serial_wait);
+	spin_lock_init(&dev->reg_lock);
+	spin_lock_init(&dev->buf_lock);
 
 	/* get the physical base address from DT */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
