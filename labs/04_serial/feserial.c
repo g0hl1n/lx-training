@@ -11,8 +11,12 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
+#include <linux/dynamic_debug.h>
+#include <linux/debugfs.h>
 
 #include <asm/uaccess.h>
+
+#define DEBUG
 
 #define SERIAL_BUFSIZE 16
 
@@ -24,13 +28,15 @@ struct feserial_dev {
 	struct miscdevice miscdev;
 	void __iomem *regs;
 	spinlock_t reg_lock; /* serial register rw lock */
-	unsigned long wcounter;
+	u64 wcounter;
 	int irq;
 	char serial_buf[SERIAL_BUFSIZE];
 	int serial_buf_rd; /* reading index */
 	int serial_buf_wr; /* writing index */
 	spinlock_t buf_lock; /* serial buffer rw lock */
 	wait_queue_head_t serial_wait;
+	struct dentry *dbg_dir;
+	struct dentry *dbg_wcounter;
 };
 
 static unsigned int reg_read(struct feserial_dev *dev, int off)
@@ -59,8 +65,9 @@ void write_char(struct feserial_dev *dev, char c)
 	while ((reg_read(dev, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
 
-	dev->wcounter++; /* increment write counter */
+	pr_debug("feserial: write %02X\n", c);
 
+	dev->wcounter++; /* increment write counter */
 	reg_write(dev, c, UART_TX);
 }
 
@@ -144,6 +151,8 @@ static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
 	spin_lock_irqsave(&dev->buf_lock, flags);
 	kbuf = dev->serial_buf[dev->serial_buf_rd++];
 	spin_unlock_irqrestore(&dev->buf_lock, flags);
+
+	pr_debug("feserial: read %02X\n", kbuf);
 
 	put_user(kbuf, buf);
 	return 1;
@@ -230,6 +239,15 @@ static int feserial_probe(struct platform_device *pdev)
 	spin_lock_init(&dev->reg_lock);
 	spin_lock_init(&dev->buf_lock);
 
+	/* create debugfs */
+	dev->dbg_dir = debugfs_create_dir(dev_name(&pdev->dev), NULL);
+	if (!dev->dbg_dir)
+		return -ENOMEM;
+	dev->dbg_wcounter = debugfs_create_u64("wcounter", S_IRUGO,
+					       dev->dbg_dir, &dev->wcounter);
+	if (!dev->dbg_wcounter)
+		return -ENOMEM;
+
 	/* get the physical base address from DT */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -307,6 +325,10 @@ static int feserial_remove(struct platform_device *pdev)
 
 	/* free */
 	kfree(dev->miscdev.name);
+
+	/* remove debugfs */
+	debugfs_remove(dev->dbg_wcounter);
+	debugfs_remove(dev->dbg_dir);
 
 	dev_info(&pdev->dev, "Removed fserial\n");
 	return 0;
