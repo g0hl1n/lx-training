@@ -10,8 +10,11 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
+#include <linux/sched.h>
 
 #include <asm/uaccess.h>
+
+#define SERIAL_BUFSIZE 16
 
 /* ioctl operations */
 #define IOCTL_SERIAL_RESET_COUNTER	0
@@ -22,6 +25,10 @@ struct feserial_dev {
 	void __iomem *regs;
 	unsigned long wcounter;
 	int irq;
+	char serial_buf[SERIAL_BUFSIZE];
+	int serial_buf_rd; /* reading index */
+	int serial_buf_wr; /* writing index */
+	wait_queue_head_t serial_wait;
 };
 
 static unsigned int reg_read(struct feserial_dev *dev, int off)
@@ -97,7 +104,31 @@ err_exit:
 static ssize_t feserial_read(struct file *fp, char __user *buf, size_t len,
 			     loff_t *off)
 {
-	return -EINVAL;
+	struct feserial_dev *dev;
+	struct miscdevice *miscdev;
+	int err;
+
+	/* get miscdev from struct file.
+	 * to work the patch from Thomas Petazzoni have to be applied! */
+	miscdev = fp->private_data;
+	if (miscdev == NULL) {
+		pr_err("unable to get device from write(), is the patch applied?\n");
+		return -EFAULT;
+	}
+
+	dev = container_of(fp->private_data, struct feserial_dev, miscdev);
+	if (dev == NULL) {
+		dev_err(miscdev->parent, "unable to get container_of miscdev\n");
+		return -EFAULT;
+	}
+
+	err = wait_event_interruptible(dev->serial_wait,
+				      dev->serial_buf_rd != dev->serial_buf_wr);
+	if (err)
+		return -ERESTARTSYS;
+
+	put_user(dev->serial_buf[dev->serial_buf_rd++], buf);
+	return 1;
 }
 
 static long feserial_unlocked_ioctl(struct file *fp, unsigned int ioctl_num,
@@ -148,11 +179,15 @@ static const struct file_operations feserial_fops = {
 
 irqreturn_t feserial_irq_handler(int irq, void *dev_id)
 {
-	unsigned int kbuf;
+	struct feserial_dev *dev = dev_id;
+	char kbuf;
 
-	kbuf = reg_read(dev_id, UART_RX);
+	kbuf = reg_read(dev, UART_RX);
+	dev->serial_buf[dev->serial_buf_wr++] = kbuf;
+	if (dev->serial_buf_wr >= SERIAL_BUFSIZE)
+		dev->serial_buf_wr = 0;
+	wake_up(&dev->serial_wait);
 
-	pr_info("IRQ %d read %c\n", irq, kbuf);
 	return IRQ_HANDLED;
 }
 
@@ -167,6 +202,9 @@ static int feserial_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 	dev->wcounter = 0;
+	dev->serial_buf_rd = 0;
+	dev->serial_buf_wr = 0;
+	init_waitqueue_head(&dev->serial_wait);
 
 	/* get the physical base address from DT */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -209,7 +247,7 @@ static int feserial_probe(struct platform_device *pdev)
 	reg_write(dev, UART_IER_RDI, UART_IER);
 	dev->irq = platform_get_irq(pdev, 0);
 	err = devm_request_irq(&pdev->dev, dev->irq, feserial_irq_handler, 0,
-			 "feserial", dev);
+			       "feserial", dev);
 	if (err) {
 		dev_err(&pdev->dev, "irq request failed\n");
 		goto err_free;
